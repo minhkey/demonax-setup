@@ -165,7 +165,7 @@ echo ""
 echo "Compiling Query Manager..."
 cd "$TEMP_BUILD_DIR/tibia-querymanager"
 make clean > /dev/null 2>&1 || true
-make -j$(nproc) > /dev/null 2>&1
+make -j$(nproc)
 install -m 755 build/querymanager "$INSTALL_DIR/querymanager/querymanager"
 echo "✓ Query Manager compiled"
 
@@ -173,7 +173,7 @@ echo "✓ Query Manager compiled"
 echo "Compiling Game Server..."
 cd "$TEMP_BUILD_DIR/tibia-game"
 make clean > /dev/null 2>&1 || true
-make -j$(nproc) > /dev/null 2>&1
+make -j$(nproc)
 install -m 755 build/game "$INSTALL_DIR/game/bin/game"
 echo "✓ Game Server compiled"
 
@@ -185,7 +185,7 @@ install -m 600 -o "$TIBIA_USER" -g "$TIBIA_USER" \
 echo "Compiling Login Server..."
 cd "$TEMP_BUILD_DIR/tibia-login"
 make clean > /dev/null 2>&1 || true
-make -j$(nproc) > /dev/null 2>&1
+make -j$(nproc)
 install -m 755 build/login "$INSTALL_DIR/login/login"
 echo "✓ Login Server compiled"
 
@@ -221,9 +221,6 @@ if [ -f "map.tar.xz" ]; then
     tar -xJf map.tar.xz -C "$INSTALL_DIR/game/"
     echo "✓ Map data extracted"
 fi
-
-# Remove empty .tibia file (config will be generated in Phase 6)
-rm -f "$INSTALL_DIR/game/.tibia"
 
 # Set ownership
 chown -R "$TIBIA_USER:$TIBIA_USER" "$INSTALL_DIR/game"
@@ -327,14 +324,13 @@ echo "✓ Query Manager config created"
 
 # Game Server configuration
 cat > "$INSTALL_DIR/game/.tibia" << EOF
-# Tibia - Graphical Multi-User-Dungeon
+# Demonax - Graphical Multi-User-Dungeon
 # .tibia: Konfigurationsdatei (Game-Server)
 # Generated: $(date)
 
 # Verzeichnisse
 BINPATH     = "$INSTALL_DIR/game/bin"
 MAPPATH     = "$INSTALL_DIR/game/map"
-ORIGMAPPATH = "$INSTALL_DIR/game/origmap"
 DATAPATH    = "$INSTALL_DIR/game/dat"
 USERPATH    = "$INSTALL_DIR/game/usr"
 LOGPATH     = "$INSTALL_DIR/game/log"
