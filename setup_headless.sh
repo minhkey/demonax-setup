@@ -70,7 +70,7 @@ apt install -y \
     g++ \
     gcc \
     make \
-    git \
+    curl \
     libssl-dev \
     sqlite3 \
     ufw \
@@ -102,29 +102,59 @@ echo "✓ Directory structure created"
 echo ""
 
 # =============================================================================
-# PHASE 3: REPOSITORY CLONING & COMPILATION
+# PHASE 3: REPOSITORY DOWNLOAD & COMPILATION
 # =============================================================================
 
-echo "=== Step 3/10: Cloning repositories ==="
+echo "=== Step 3/10: Downloading repositories ==="
 
 mkdir -p "$TEMP_BUILD_DIR"
 cd "$TEMP_BUILD_DIR"
 
-echo "Cloning tibia-querymanager..."
-git clone --quiet "$REPO_QUERYMANAGER"
-echo "✓ tibia-querymanager cloned"
+# Function to download and extract GitHub repository
+download_github_repo() {
+    local repo_name="$1"
+    local repo_url="https://github.com/minhkey/${repo_name}"
 
-echo "Cloning tibia-game..."
-git clone --quiet "$REPO_GAME"
-echo "✓ tibia-game cloned"
+    echo "Downloading ${repo_name}..."
 
-echo "Cloning tibia-login..."
-git clone --quiet "$REPO_LOGIN"
-echo "✓ tibia-login cloned"
+    # Try main branch first, then master
+    if curl -L -s -f "${repo_url}/archive/refs/heads/main.tar.gz" -o "${repo_name}.tar.gz"; then
+        echo "  Downloaded main branch"
+    elif curl -L -s -f "${repo_url}/archive/refs/heads/master.tar.gz" -o "${repo_name}.tar.gz"; then
+        echo "  Downloaded master branch"
+    else
+        echo "Error: Failed to download ${repo_name}"
+        exit 1
+    fi
 
-echo "Cloning demonax-data..."
-git clone --quiet "$REPO_DATA"
-echo "✓ demonax-data cloned"
+    # Extract tarball
+    tar -xzf "${repo_name}.tar.gz"
+
+    # Rename extracted directory to remove branch suffix
+    if [ -d "${repo_name}-main" ]; then
+        mv "${repo_name}-main" "${repo_name}"
+    elif [ -d "${repo_name}-master" ]; then
+        mv "${repo_name}-master" "${repo_name}"
+    else
+        # Try to find any directory starting with repo_name-
+        extracted_dir=$(find . -maxdepth 1 -type d -name "${repo_name}-*" | head -1)
+        if [ -n "$extracted_dir" ]; then
+            mv "$extracted_dir" "${repo_name}"
+        else
+            echo "Error: Could not find extracted directory for ${repo_name}"
+            exit 1
+        fi
+    fi
+
+    rm -f "${repo_name}.tar.gz"
+    echo "✓ ${repo_name} downloaded and extracted"
+}
+
+# Download all repositories
+download_github_repo "tibia-querymanager"
+download_github_repo "tibia-game"
+download_github_repo "tibia-login"
+download_github_repo "demonax-data"
 
 echo ""
 echo "=== Compiling binaries ==="
