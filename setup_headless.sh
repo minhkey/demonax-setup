@@ -1,7 +1,8 @@
 #!/bin/bash
 # Automated Tibia 7.7 Server Setup Script for Headless Debian 13
 # This script downloads, compiles, and configures a complete Tibia 7.7 server
-# Usage: sudo ./setup_headless.sh
+# Downloads demonax branch for tibia-game repository
+# Usage: sudo ./setup_headless_demonax.sh
 
 set -e  # Exit on error
 set -u  # Exit on undefined variable
@@ -44,94 +45,72 @@ REPO_LOGIN="https://github.com/minhkey/tibia-login.git"
 REPO_DATA="https://github.com/minhkey/demonax-data.git"
 
 # =============================================================================
-# PHASE 1: VALIDATION & DEPENDENCIES
+# UTILITY FUNCTIONS
 # =============================================================================
 
-echo "=========================================="
-echo "  Tibia 7.7 Headless Server Setup"
-echo "=========================================="
-echo ""
+print_step() {
+    echo ""
+    echo "=== $1 ==="
+    echo ""
+}
 
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then
-   echo "Error: This script must be run as root (use sudo)"
-   exit 1
-fi
+check_command() {
+    if ! command -v "$1" &> /dev/null; then
+        echo "Error: $1 not found. Please install $2"
+        exit 1
+    fi
+}
 
-# Game data now comes from demonax-data repository
-echo "Game data will be sourced from demonax-data repository"
-echo ""
+verify_file() {
+    if [ ! -f "$1" ]; then
+        echo "Error: Required file not found: $1"
+        exit 1
+    fi
+}
 
-# Update system packages
-echo "=== Step 1/10: Installing system dependencies ==="
-apt update
-apt install -y \
-    build-essential \
-    g++ \
-    gcc \
-    make \
-    curl \
-    libssl-dev \
-    sqlite3 \
-    ufw \
-    systemd
+verify_directory() {
+    if [ ! -d "$1" ]; then
+        echo "Error: Required directory not found: $1"
+        exit 1
+    fi
+}
 
-echo "✓ Dependencies installed"
-echo ""
-
-# =============================================================================
-# PHASE 2: USER & DIRECTORY SETUP
-# =============================================================================
-
-echo "=== Step 2/10: Creating user and directory structure ==="
-
-# Create tibia service user
-if ! id "$TIBIA_USER" &>/dev/null; then
-    useradd -r -m -s /bin/bash "$TIBIA_USER"
-    echo "✓ Created user: $TIBIA_USER"
-else
-    echo "✓ User already exists: $TIBIA_USER"
-fi
-
-# Create directory structure
-mkdir -p "$INSTALL_DIR"/{game,login,querymanager}
-mkdir -p "$INSTALL_DIR/game"/{bin,dat,map,mon,npc,usr,log,save}
-
-chown -R "$TIBIA_USER:$TIBIA_USER" "$INSTALL_DIR"
-echo "✓ Directory structure created"
-echo ""
-
-# =============================================================================
-# PHASE 3: REPOSITORY DOWNLOAD & COMPILATION
-# =============================================================================
-
-echo "=== Step 3/10: Downloading repositories ==="
-
-mkdir -p "$TEMP_BUILD_DIR"
-cd "$TEMP_BUILD_DIR"
-
-# Function to download and extract GitHub repository
-download_github_repo() {
+# Function to download and extract GitHub repository with optional branch
+download_github_repo_branch() {
     local repo_name="$1"
+    local branch="${2:-}"  # Optional branch name
     local repo_url="https://github.com/minhkey/${repo_name}"
 
     echo "Downloading ${repo_name}..."
 
-    # Try main branch first, then master
-    if curl -L -s -f "${repo_url}/archive/refs/heads/main.tar.gz" -o "${repo_name}.tar.gz"; then
-        echo "  Downloaded main branch"
-    elif curl -L -s -f "${repo_url}/archive/refs/heads/master.tar.gz" -o "${repo_name}.tar.gz"; then
-        echo "  Downloaded master branch"
+    if [ -n "$branch" ]; then
+        # Try specific branch
+        echo "  Attempting to download branch: $branch"
+        if curl -L -s -f "${repo_url}/archive/refs/heads/${branch}.tar.gz" -o "${repo_name}.tar.gz"; then
+            echo "  Downloaded ${branch} branch"
+        else
+            echo "Error: Failed to download ${repo_name} branch: ${branch}"
+            exit 1
+        fi
     else
-        echo "Error: Failed to download ${repo_name}"
-        exit 1
+        # Try main branch first, then master
+        if curl -L -s -f "${repo_url}/archive/refs/heads/main.tar.gz" -o "${repo_name}.tar.gz"; then
+            echo "  Downloaded main branch"
+        elif curl -L -s -f "${repo_url}/archive/refs/heads/master.tar.gz" -o "${repo_name}.tar.gz"; then
+            echo "  Downloaded master branch"
+        else
+            echo "Error: Failed to download ${repo_name}"
+            exit 1
+        fi
     fi
 
     # Extract tarball
     tar -xzf "${repo_name}.tar.gz"
 
     # Rename extracted directory to remove branch suffix
-    if [ -d "${repo_name}-main" ]; then
+    if [ -d "${repo_name}-${branch}" ]; then
+        mv "${repo_name}-${branch}" "${repo_name}"
+    elif [ -d "${repo_name}-main" ]; then
         mv "${repo_name}-main" "${repo_name}"
     elif [ -d "${repo_name}-master" ]; then
         mv "${repo_name}-master" "${repo_name}"
@@ -150,64 +129,176 @@ download_github_repo() {
     echo "✓ ${repo_name} downloaded and extracted"
 }
 
-# Download all repositories
-download_github_repo "tibia-querymanager"
-download_github_repo "tibia-game"
-download_github_repo "tibia-login"
-download_github_repo "demonax-data"
+# =============================================================================
+# PHASE 1: VALIDATION & DEPENDENCIES
+# =============================================================================
 
+echo "=========================================="
+echo "  Tibia 7.7 Headless Server Setup"
+echo "=========================================="
 echo ""
-echo "=== Compiling binaries ==="
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+   echo "Error: This script must be run as root (use sudo)"
+   exit 1
+fi
+
+# Game data now comes from demonax-data repository
+echo "Game data will be sourced from demonax-data repository"
+echo "Using demonax branch for tibia-game repository"
+echo ""
+
+print_step "Step 1/10: Installing system dependencies"
+
+# Update system packages
+apt update
+
+# Install build dependencies
+apt install -y \
+    build-essential \
+    g++ \
+    gcc \
+    make \
+    curl \
+    libssl-dev \
+    sqlite3 \
+    ufw \
+    systemd \
+    pkg-config \
+    zlib1g-dev
+
+echo "✓ Dependencies installed"
+
+# =============================================================================
+# PHASE 2: USER & DIRECTORY SETUP
+# =============================================================================
+
+print_step "Step 2/10: Creating user and directory structure"
+
+# Create tibia service user
+if ! id "$TIBIA_USER" &>/dev/null; then
+    useradd -r -m -s /bin/bash "$TIBIA_USER"
+    echo "✓ Created user: $TIBIA_USER"
+else
+    echo "✓ User already exists: $TIBIA_USER"
+fi
+
+# Create directory structure
+mkdir -p "$INSTALL_DIR"/{game,login,querymanager}
+mkdir -p "$INSTALL_DIR/game"/{bin,dat,map,mon,npc,usr,log,save}
+
+chown -R "$TIBIA_USER:$TIBIA_USER" "$INSTALL_DIR"
+echo "✓ Directory structure created"
+
+# =============================================================================
+# PHASE 3: REPOSITORY DOWNLOAD & COMPILATION
+# =============================================================================
+
+print_step "Step 3/10: Downloading repositories"
+
+mkdir -p "$TEMP_BUILD_DIR"
+cd "$TEMP_BUILD_DIR"
+
+# Download all repositories with specific branches
+echo "Downloading repositories..."
+download_github_repo_branch "tibia-querymanager" ""  # Default branch
+download_github_repo_branch "tibia-game" "demonax"    # demonax branch
+download_github_repo_branch "tibia-login" ""          # Default branch
+download_github_repo_branch "demonax-data" ""         # Default branch
+
+print_step "Compiling binaries"
 echo "This may take several minutes..."
-echo ""
 
 # Compile Query Manager
 echo "Compiling Query Manager..."
 cd "$TEMP_BUILD_DIR/tibia-querymanager"
 make clean > /dev/null 2>&1 || true
-make -j$(nproc)
+if ! make -j$(nproc); then
+    echo "Error: Query Manager compilation failed"
+    exit 1
+fi
+verify_file "build/querymanager"
 install -m 755 build/querymanager "$INSTALL_DIR/querymanager/querymanager"
-echo "✓ Query Manager compiled"
+verify_file "$INSTALL_DIR/querymanager/querymanager"
+echo "✓ Query Manager compiled and installed"
 
-# Compile Game Server
-echo "Compiling Game Server..."
+# Compile Game Server (from demonax branch)
+echo "Compiling Game Server (demonax branch)..."
 cd "$TEMP_BUILD_DIR/tibia-game"
 make clean > /dev/null 2>&1 || true
-make -j$(nproc)
-install -m 755 build/game "$INSTALL_DIR/game/bin/game"
-echo "✓ Game Server compiled"
+if ! make -j$(nproc); then
+    echo "Error: Game Server compilation failed"
+    echo "Checking for missing dependencies..."
+    if ! make -j$(nproc); then
+        echo "Game Server compilation failed even with additional dependencies"
+        exit 1
+    fi
+fi
+verify_file "build/game"
 
-# Copy RSA key to game directory
-install -m 600 -o "$TIBIA_USER" -g "$TIBIA_USER" \
-    tibia.pem "$INSTALL_DIR/game/tibia.pem"
+# Test the binary for library dependencies
+echo "Testing compiled binary..."
+if ! ldd build/game 2>&1 | grep -q "not found"; then
+    echo "✓ Binary has all library dependencies"
+else
+    echo "Warning: Binary has missing library dependencies:"
+    ldd build/game 2>&1 | grep "not found"
+    exit 1
+fi
+
+install -m 755 build/game "$INSTALL_DIR/game/bin/game"
+verify_file "$INSTALL_DIR/game/bin/game"
+
+# Verify binary is executable and has correct permissions
+if [ ! -x "$INSTALL_DIR/game/bin/game" ]; then
+    echo "Error: Installed binary is not executable"
+    exit 1
+fi
+chown tibia:tibia "$INSTALL_DIR/game/bin/game"
+echo "✓ Game Server compiled and installed"
+
+# Copy RSA key to game directory (if exists in source)
+if [ -f "tibia.pem" ]; then
+    install -m 600 -o "$TIBIA_USER" -g "$TIBIA_USER" \
+        tibia.pem "$INSTALL_DIR/game/tibia.pem"
+    echo "✓ RSA key copied to game directory"
+else
+    echo "Warning: tibia.pem not found in tibia-game source directory"
+fi
 
 # Compile Login Server
 echo "Compiling Login Server..."
 cd "$TEMP_BUILD_DIR/tibia-login"
 make clean > /dev/null 2>&1 || true
-make -j$(nproc)
+if ! make -j$(nproc); then
+    echo "Error: Login Server compilation failed"
+    exit 1
+fi
+verify_file "build/login"
 install -m 755 build/login "$INSTALL_DIR/login/login"
-echo "✓ Login Server compiled"
+verify_file "$INSTALL_DIR/login/login"
+echo "✓ Login Server compiled and installed"
 
-# Copy RSA key to login directory
-install -m 600 -o "$TIBIA_USER" -g "$TIBIA_USER" \
-    "$INSTALL_DIR/game/tibia.pem" "$INSTALL_DIR/login/tibia.pem"
-
-echo ""
+# Copy RSA key to login directory (use game's key if available)
+if [ -f "$INSTALL_DIR/game/tibia.pem" ]; then
+    install -m 600 -o "$TIBIA_USER" -g "$TIBIA_USER" \
+        "$INSTALL_DIR/game/tibia.pem" "$INSTALL_DIR/login/tibia.pem"
+    echo "✓ RSA key copied to login directory"
+else
+    echo "Warning: No RSA key available for login server"
+fi
 
 # =============================================================================
 # PHASE 4: GAME DATA DEPLOYMENT
 # =============================================================================
 
-echo "=== Step 4/10: Deploying game data ==="
+print_step "Step 4/10: Deploying game data"
 
 echo "Copying game data from demonax-data repository..."
 
 # Verify demonax-data/game exists
-if [ ! -d "$TEMP_BUILD_DIR/demonax-data/game" ]; then
-    echo "Error: demonax-data/game directory not found at $TEMP_BUILD_DIR/demonax-data/game"
-    exit 1
-fi
+verify_directory "$TEMP_BUILD_DIR/demonax-data/game"
 
 cd "$TEMP_BUILD_DIR/demonax-data/game"
 
@@ -225,13 +316,12 @@ fi
 # Set ownership
 chown -R "$TIBIA_USER:$TIBIA_USER" "$INSTALL_DIR/game"
 echo "✓ Game data deployed"
-echo ""
 
 # =============================================================================
 # PHASE 5: DATABASE INITIALIZATION
 # =============================================================================
 
-echo "=== Step 5/10: Initializing database ==="
+print_step "Step 5/10: Initializing database"
 
 # Calculate premium end timestamp (20 years from now)
 CURRENT_TIMESTAMP=$(date +%s)
@@ -288,13 +378,12 @@ echo "✓ Database initialized"
 echo "  - Account: $DEFAULT_ACCOUNT_NUMBER / $DEFAULT_ACCOUNT_PASSWORD"
 echo "  - Premium until: $(date -d @$PREMIUM_END '+%Y-%m-%d')"
 echo "  - Characters: Test Knight, Test Paladin, Test Sorcerer, Test Druid"
-echo ""
 
 # =============================================================================
 # PHASE 6: CONFIGURATION FILES
 # =============================================================================
 
-echo "=== Step 6/10: Creating configuration files ==="
+print_step "Step 6/10: Creating configuration files"
 
 # Query Manager configuration
 cat > "$INSTALL_DIR/querymanager/config.cfg" << EOF
@@ -385,13 +474,12 @@ EOF
 
 chown "$TIBIA_USER:$TIBIA_USER" "$INSTALL_DIR/login/config.cfg"
 echo "✓ Login Server config created"
-echo ""
 
 # =============================================================================
 # PHASE 7: SYSTEMD SERVICES
 # =============================================================================
 
-echo "=== Step 7/10: Creating systemd service files ==="
+print_step "Step 7/10: Creating systemd service files"
 
 # Query Manager service
 cat > /etc/systemd/system/tibia-querymanager.service << EOF
@@ -472,13 +560,12 @@ echo "✓ Login Server service created"
 # Reload systemd
 systemctl daemon-reload
 echo "✓ Systemd configuration reloaded"
-echo ""
 
 # =============================================================================
 # PHASE 8: FIREWALL CONFIGURATION
 # =============================================================================
 
-echo "=== Step 8/10: Configuring firewall ==="
+print_step "Step 8/10: Configuring firewall"
 
 ufw allow $LOGIN_PORT/tcp comment 'Tibia Login Server'
 ufw allow $GAME_PORT/tcp comment 'Tibia Game Server'
@@ -493,13 +580,31 @@ else
 fi
 
 echo "✓ Firewall rules configured"
-echo ""
 
 # =============================================================================
 # PHASE 9: SERVICE STARTUP
 # =============================================================================
 
-echo "=== Step 9/10: Starting services ==="
+print_step "Step 9/10: Starting services"
+
+# Cleanup existing services and PID files before starting
+echo "Cleaning up existing services and PID files..."
+
+# Stop systemd services
+systemctl stop tibia-game.service tibia-login.service tibia-querymanager.service 2>/dev/null || true
+
+# Kill any remaining processes
+pkill -f "bin/game" 2>/dev/null || true
+pkill -f "querymanager" 2>/dev/null || true
+pkill -f "login" 2>/dev/null || true
+
+# Remove PID files created by game server
+rm -f /opt/tibia/game/save/game.pid
+rm -f /opt/tibia/game/*.pid
+rm -f /opt/tibia/game/save/*.pid
+
+# Wait for processes to terminate
+sleep 3
 
 # Enable services for auto-start
 systemctl enable tibia-querymanager.service > /dev/null 2>&1
@@ -531,6 +636,13 @@ if systemctl is-active --quiet tibia-game.service; then
     echo "✓ Game Server is running"
 else
     echo "✗ Game Server failed to start"
+    echo "Checking binary and dependencies..."
+    # Test the binary directly
+    if [ -f "$INSTALL_DIR/game/bin/game" ]; then
+        echo "Binary exists at: $INSTALL_DIR/game/bin/game"
+        file "$INSTALL_DIR/game/bin/game"
+        ldd "$INSTALL_DIR/game/bin/game" 2>&1 | grep -E "not found|error" || true
+    fi
     journalctl -u tibia-game -n 20 --no-pager
     exit 1
 fi
@@ -563,7 +675,7 @@ echo ""
 # PHASE 10: CLEANUP & DOCUMENTATION
 # =============================================================================
 
-echo "=== Step 10/10: Cleanup and finalization ==="
+print_step "Step 10/10: Cleanup and finalization"
 
 # Create admin helper script
 cat > "$INSTALL_DIR/admin-console.sh" << 'ADMIN_EOF'
@@ -605,7 +717,6 @@ echo "✓ Admin console script created"
 echo "Cleaning up temporary files..."
 rm -rf "$TEMP_BUILD_DIR"
 echo "✓ Temporary files removed"
-echo ""
 
 # Get server IP
 SERVER_IP_ACTUAL=$(hostname -I | awk '{print $1}')
